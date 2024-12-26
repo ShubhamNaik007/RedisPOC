@@ -1,9 +1,11 @@
 package com.redis.service;
 
 import com.redis.models.Product;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
@@ -18,8 +20,10 @@ import java.util.stream.Collectors;
 @Component
 public class ProductService {
 
-    private static final String HASH_KEY = "ProductData";
+    private static final String HASH_KEY = "productsDetails";
     private static final long CACHE_TTL = 300L;
+
+    private static final Logger log = LoggerFactory.getLogger(ProductService.class);
 
     private final RedisTemplate<String, Object> template;
 
@@ -28,6 +32,7 @@ public class ProductService {
         this.template = template;
     }
 
+    @CachePut
     public Product save(Product product) {
         template.opsForHash().put(HASH_KEY, product.getId(), product);
         return product;
@@ -37,11 +42,9 @@ public class ProductService {
         List<Object> cachedData = template.opsForHash().values(HASH_KEY);
 
         if (cachedData.isEmpty()) {
-            System.out.println("Cache miss: Fetching from database");
+            log.info("Fetching from database");
 
             List<Product> allProducts = fetchFromDatabase();
-
-            System.out.println("allProducts fetch from Db "+allProducts);
 
             template.opsForHash().putAll(HASH_KEY, allProducts.stream()
                     .collect(Collectors.toMap(product -> String.valueOf(product.getId()), product -> product)));
@@ -50,37 +53,38 @@ public class ProductService {
 
             return allProducts;
         }
-        System.out.println("Redis cache already present");
+
+        log.info("Redis cache already present");
 
         return cachedData.stream()
                 .map(product -> (Product) product)
                 .collect(Collectors.toList());
     }
 
-    @Cacheable(value = "Product")
     public Product findProductById(int id) {
-        System.out.println("findProductById is called");
+        String cacheKey = String.valueOf(id);
 
-        Product product = (Product) template.opsForHash().get(HASH_KEY, id);
+        Product product = (Product) template.opsForHash().get(HASH_KEY, cacheKey);
 
         if (product == null) {
-            System.out.println("No Cache at redis,fetching it from db");
+            log.info("Fetching from database");
+
             product = fetchProductFromDatabaseById(id);
 
-            template.opsForHash().put(HASH_KEY, id, product);
-
+            template.opsForHash().put(HASH_KEY, cacheKey, product);
             template.expire(HASH_KEY, CACHE_TTL, TimeUnit.SECONDS);
+
+            log.info("for id - {} fetched Product from DB is {}", id,product);
+        } else {
+            log.warn("Cache hit for product id {}", id);
         }
 
-        System.out.println("Data is already present at cache");
         return product;
     }
 
     @CacheEvict
-    public String deleteProductById(int id) {
-        System.out.println("delete method called");
+    public void deleteProductById(int id) {
         template.opsForHash().delete(HASH_KEY, id);
-        return "Product removed!";
     }
 
     private List<Product> fetchFromDatabase() {
@@ -97,6 +101,6 @@ public class ProductService {
     }
 
     private Product fetchProductFromDatabaseById(int id) {
-        return new Product(id, "Product" + id, 10, 100);
+        return new Product(id, "Product" + id, 10, 200);
     }
 }
